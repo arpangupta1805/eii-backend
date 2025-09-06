@@ -1,4 +1,24 @@
 require('dotenv').config();
+
+// Validate required environment variables
+const requiredEnvVars = [
+  'MONGODB_URI',
+  'GEMINI_API_KEY',
+  'CLERK_SECRET_KEY'
+];
+
+const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+if (missingEnvVars.length > 0) {
+  console.error('Missing required environment variables:', missingEnvVars);
+  console.error('Please check your .env file');
+  process.exit(1);
+}
+
+console.log('Environment check passed');
+console.log('MongoDB URI configured:', process.env.MONGODB_URI ? 'Yes' : 'No');
+console.log('Gemini API Key configured:', process.env.GEMINI_API_KEY ? 'Yes' : 'No');
+console.log('Clerk Secret Key configured:', process.env.CLERK_SECRET_KEY ? 'Yes' : 'No');
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -40,31 +60,78 @@ app.use(helmet({
 // CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
+    // Normalize frontend URL (remove trailing slash if present)
+    const normalizedFrontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '');
+    
     const allowedOrigins = [
-      process.env.FRONTEND_URL,
+      normalizedFrontendUrl,
+      'https://eii-sigma-7.vercel.app',
       'http://localhost:3000',
       'http://localhost:5173',
-      'http://localhost:8080'
+      'http://localhost:8080',
+      'https://eii-backend.onrender.com'
     ].filter(Boolean);
     
-    // Allow requests with no origin (mobile apps, etc.)
-    if (!origin) return callback(null, true);
+    console.log('CORS Check - Origin:', origin);
+    console.log('Allowed Origins:', allowedOrigins);
+    
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) {
+      console.log('No origin - allowing request');
+      return callback(null, true);
+    }
     
     if (allowedOrigins.includes(origin)) {
+      console.log('Origin allowed');
       callback(null, true);
     } else if (process.env.NODE_ENV === 'development') {
+      console.log('Development mode - allowing all origins');
       callback(null, true);
     } else {
+      console.log('Origin not allowed:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: ['X-Total-Count', 'X-Page-Count'],
   maxAge: 86400 // 24 hours
 };
 
 app.use(cors(corsOptions));
+
+// Handle preflight OPTIONS requests explicitly
+app.options('*', cors(corsOptions));
+
+// Additional CORS headers for all responses
+app.use((req, res, next) => {
+  const normalizedFrontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '');
+  const origin = req.headers.origin;
+  
+  if (origin === normalizedFrontendUrl || origin === 'https://eii-sigma-7.vercel.app') {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
 
 // Rate limiting with different limits for different routes
 const createRateLimiter = (windowMs, max, message) => rateLimit({
@@ -110,6 +177,24 @@ if (process.env.NODE_ENV === 'development') {
 } else {
   app.use(morgan('combined'));
 }
+
+// Additional CORS and request logging
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const method = req.method;
+  const url = req.url;
+  
+  if (process.env.NODE_ENV === 'production') {
+    console.log(`${method} ${url} - Origin: ${origin || 'None'}`);
+    
+    // Log CORS headers being sent
+    if (method === 'OPTIONS') {
+      console.log('CORS Preflight Request detected');
+    }
+  }
+  
+  next();
+});
 
 // Body parsing middleware with size limits
 app.use(express.json({ 
@@ -173,6 +258,26 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+// CORS test endpoint
+app.get('/api/cors-test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'CORS is working correctly',
+    origin: req.headers.origin,
+    timestamp: new Date().toISOString(),
+    headers: {
+      'access-control-allow-origin': res.getHeader('access-control-allow-origin'),
+      'access-control-allow-credentials': res.getHeader('access-control-allow-credentials'),
+      'access-control-allow-methods': res.getHeader('access-control-allow-methods'),
+    }
+  });
+});
+
+// Handle preflight for CORS test
+app.options('/api/cors-test', (req, res) => {
+  res.status(200).end();
+});
+
 // API routes with versioning
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/content', contentRoutes);
@@ -184,6 +289,24 @@ app.use('/api/auth', authRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api/quiz', quizRoutes);
 app.use('/api/analytics', analyticsRoutes);
+
+// Root route for health check and basic info
+app.get('/', (req, res) => {
+  res.json({
+    message: 'YATI-Discipline Learning Platform API',
+    status: 'running',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/health',
+      status: '/api/status',
+      auth: '/api/auth',
+      content: '/api/content',
+      quiz: '/api/quiz',
+      analytics: '/api/analytics'
+    }
+  });
+});
 
 // Catch unhandled routes
 app.use('*', (req, res, next) => {
