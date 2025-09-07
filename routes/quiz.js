@@ -6,6 +6,86 @@ const Content = require('../models/Content');
 const Quiz = require('../models/Quiz');
 const QuizAttempt = require('../models/QuizAttempt');
 
+// Get all quizzes for the authenticated user
+router.get('/all', requireAuth, getOrCreateUser, async (req, res, next) => {
+  try {
+    const { clerkUserId, _id: userId } = req.user;
+    const { page = 1, limit = 10, status = 'all' } = req.query;
+
+    // Build query
+    const query = {
+      $or: [
+        { userId: userId },
+        { clerkUserId: clerkUserId }
+      ]
+    };
+
+    // Filter by status if specified
+    if (status !== 'all') {
+      query.status = status;
+    }
+
+    // Get total count
+    const totalQuizzes = await Quiz.countDocuments(query);
+
+    // Get quizzes with pagination
+    const quizzes = await Quiz.find(query)
+      .populate('contentId', 'title category fileName uploadDate')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get quiz attempts for each quiz to show completion status
+    const quizzesWithAttempts = await Promise.all(
+      quizzes.map(async (quiz) => {
+        const attempts = await QuizAttempt.find({
+          quizId: quiz._id,
+          userId: userId,
+          status: 'completed'
+        })
+        .sort({ completedAt: -1 })
+        .limit(5)
+        .lean();
+
+        const bestAttempt = attempts.length > 0 
+          ? attempts.reduce((best, current) => current.score > best.score ? current : best)
+          : null;
+
+        const latestAttempt = attempts.length > 0 ? attempts[0] : null;
+
+        return {
+          ...quiz,
+          totalAttempts: attempts.length,
+          bestScore: bestAttempt?.score || 0,
+          latestScore: latestAttempt?.score || null,
+          latestAttemptDate: latestAttempt?.completedAt || null,
+          hasAttempts: attempts.length > 0,
+          isPassed: bestAttempt ? bestAttempt.passed : false,
+          questionCount: quiz.questions?.length || 0
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: {
+        quizzes: quizzesWithAttempts,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalQuizzes / limit),
+          totalQuizzes,
+          hasNextPage: page * limit < totalQuizzes,
+          hasPrevPage: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get all quizzes error:', error);
+    next(error);
+  }
+});
+
 // Generate quiz from content
 router.post('/generate', requireAuth, getOrCreateUser, async (req, res, next) => {
   try {
@@ -250,6 +330,48 @@ router.get('/:quizId', requireAuth, getOrCreateUser, async (req, res, next) => {
     });
   } catch (error) {
     console.error('Get quiz by ID error:', error);
+    next(error);
+  }
+});
+
+// Get quiz attempts by quiz ID
+router.get('/:quizId/attempts', requireAuth, getOrCreateUser, async (req, res, next) => {
+  try {
+    const { quizId } = req.params;
+    const { clerkUserId, _id: userId } = req.user;
+
+    // Verify quiz exists and user has access
+    const quiz = await Quiz.findOne({
+      _id: quizId,
+      $or: [
+        { userId: userId },
+        { clerkUserId: clerkUserId }
+      ]
+    });
+
+    if (!quiz) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quiz not found',
+        error: 'QUIZ_NOT_FOUND'
+      });
+    }
+
+    // Get all completed attempts for this quiz
+    const attempts = await QuizAttempt.find({
+      quizId: quizId,
+      userId: userId,
+      status: 'completed'
+    })
+    .sort({ completedAt: -1 })
+    .lean();
+
+    res.json({
+      success: true,
+      data: attempts
+    });
+  } catch (error) {
+    console.error('Get quiz attempts error:', error);
     next(error);
   }
 });
