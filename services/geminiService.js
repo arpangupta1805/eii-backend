@@ -366,6 +366,113 @@ class GeminiService {
       throw new Error('Failed to generate quiz summary');
     }
   }
+
+  // Chatbot methods
+  async generateContextualResponse(userMessage, contentText, contentTitle, aiSummary) {
+    try {
+      const prompt = `
+        You are an AI learning assistant helping a student understand educational content. 
+        
+        Context Information:
+        - Content Title: ${contentTitle}
+        - Content Summary: ${aiSummary?.summary || 'No summary available'}
+        - Key Topics: ${aiSummary?.keyTopics ? aiSummary.keyTopics.join(', ') : 'No key topics available'}
+        
+        Full Content Text (for reference):
+        ${contentText.substring(0, 3000)}...
+        
+        Student's Question: ${userMessage}
+        
+        Instructions:
+        1. Answer the student's question based ONLY on the provided content
+        2. Be helpful, educational, and encouraging
+        3. If the question is not related to the content, politely redirect them to content-related topics
+        4. Use examples from the content when possible
+        5. Keep responses concise but informative (2-4 paragraphs)
+        6. If you don't know something based on the content, say so honestly
+        
+        Provide a helpful response:
+      `;
+
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      return response.text().trim();
+    } catch (error) {
+      console.error('Error generating contextual response:', error);
+      throw new Error('Failed to generate contextual response');
+    }
+  }
+
+  async generateQuizContextualResponse(userMessage, contextData) {
+    try {
+      const { quizTitle, questions, userAnswers, score, totalQuestions, contentTitle, contentText, contentSummary } = contextData;
+      
+      const prompt = `
+        You are an AI learning assistant helping a student with their quiz performance and understanding.
+        
+        Context Information:
+        - Quiz Title: ${quizTitle}
+        - Content Title: ${contentTitle}
+        - Content Summary: ${contentSummary?.summary || 'No summary available'}
+        ${score !== undefined ? `- Quiz Score: ${score}/${totalQuestions}` : '- Quiz not yet attempted'}
+        
+        Quiz Questions and User's Performance:
+        ${questions.map((q, index) => {
+          const userAnswer = userAnswers ? userAnswers[index] : null;
+          return `
+          Question ${index + 1}: ${q.question}
+          Correct Answer: ${q.options[q.correctAnswer]}
+          User's Answer: ${userAnswer !== null ? q.options[userAnswer] || 'Not answered' : 'Not answered'}
+          `;
+        }).join('\n')}
+        
+        Student's Question: ${userMessage}
+        
+        Instructions:
+        1. Help the student understand the quiz content and their performance
+        2. Explain concepts related to questions they got wrong
+        3. Provide encouragement and learning tips
+        4. Reference specific questions when relevant
+        5. If they ask about content not in the quiz, relate it back to the quiz topics
+        6. Keep responses educational and supportive
+        
+        Provide a helpful response:
+      `;
+
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      return response.text().trim();
+    } catch (error) {
+      console.error('Error generating quiz contextual response:', error);
+      throw new Error('Failed to generate quiz contextual response');
+    }
+  }
+
+  async generateGeneralResponse(userMessage) {
+    try {
+      const prompt = `
+        You are an AI learning assistant for an educational platform called YATI-Discipline. 
+        
+        Student's Question: ${userMessage}
+        
+        Instructions:
+        1. Provide helpful, educational responses
+        2. Encourage learning and academic growth
+        3. If asked about platform features, explain that you help with content understanding and quiz performance
+        4. Keep responses encouraging and supportive
+        5. If the question is too general, suggest they visit specific content or quiz sections for more targeted help
+        
+        Provide a helpful response:
+      `;
+
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      return response.text().trim();
+    } catch (error) {
+      console.error('Error generating general response:', error);
+      throw new Error('Failed to generate general response');
+    }
+  }
 }
 
 module.exports = new GeminiService();

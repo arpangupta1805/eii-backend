@@ -34,6 +34,7 @@ const authRoutes = require('./routes/auth');
 const contentRoutes = require('./routes/content');
 const quizRoutes = require('./routes/quiz');
 const analyticsRoutes = require('./routes/analytics');
+const chatbotRoutes = require('./routes/chatbot');
 
 // Import middleware
 const errorHandler = require('./middleware/errorHandler');
@@ -283,12 +284,14 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/content', contentRoutes);
 app.use('/api/v1/quiz', quizRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
+app.use('/api/v1/chatbot', chatbotRoutes);
 
 // Backward compatibility (without versioning)
 app.use('/api/auth', authRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api/quiz', quizRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/chatbot', chatbotRoutes);
 
 // Root route for health check and basic info
 app.get('/', (req, res) => {
