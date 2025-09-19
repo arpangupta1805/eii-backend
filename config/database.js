@@ -8,7 +8,7 @@ const connectDB = async () => {
       useUnifiedTopology: true,
       serverSelectionTimeoutMS: 30000, // 30 seconds
       socketTimeoutMS: 45000, // 45 seconds
-      maxPoolSize: 10, // Maintain up to 10 socket connections
+      maxPoolSize: 10, // Maintain up to 10 socket connections only to prevent the overload 
       minPoolSize: 5, // Maintain a minimum of 5 socket connections
       maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
       bufferCommands: false, // Disable mongoose buffering for commands

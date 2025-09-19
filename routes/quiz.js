@@ -5,6 +5,7 @@ const geminiService = require('../services/geminiService');
 const Content = require('../models/Content');
 const Quiz = require('../models/Quiz');
 const QuizAttempt = require('../models/QuizAttempt');
+const User = require('../models/User');
 
 // Get all quizzes for the authenticated user
 router.get('/all', requireAuth, getOrCreateUser, async (req, res, next) => {
@@ -682,6 +683,14 @@ router.post('/attempt/:attemptId/submit', requireAuth, getOrCreateUser, async (r
 
     await quiz.save();
 
+    // Update user streak for quiz completion
+    try {
+      await updateUserStreak(userId);
+    } catch (error) {
+      console.error('Failed to update user streak:', error);
+      // Don't fail the submission if streak update fails
+    }
+
     // Generate AI-powered quiz performance summary
     let quizSummary = null;
     try {
@@ -858,5 +867,58 @@ router.get('/results/:contentId', requireAuth, getOrCreateUser, async (req, res,
     next(error);
   }
 });
+
+// Helper function to update user streak
+async function updateUserStreak(userId) {
+  try {
+    const user = await User.findById(userId);
+    if (!user) return;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const lastActivity = user.profile.streak.lastActivity;
+    let currentStreak = user.profile.streak.current || 0;
+    let longestStreak = user.profile.streak.longest || 0;
+
+    if (!lastActivity) {
+      // First activity ever
+      currentStreak = 1;
+    } else {
+      const lastActivityDate = new Date(lastActivity);
+      lastActivityDate.setHours(0, 0, 0, 0);
+      
+      const daysDifference = Math.floor((today - lastActivityDate) / (1000 * 60 * 60 * 24));
+      
+      if (daysDifference === 0) {
+        // Same day, don't increment streak
+        return;
+      } else if (daysDifference === 1) {
+        // Consecutive day, increment streak
+        currentStreak += 1;
+      } else {
+        // Streak broken, start over
+        currentStreak = 1;
+      }
+    }
+
+    // Update longest streak if current is longer
+    if (currentStreak > longestStreak) {
+      longestStreak = currentStreak;
+    }
+
+    // Update user streak data
+    await User.findByIdAndUpdate(userId, {
+      'profile.streak.current': currentStreak,
+      'profile.streak.longest': longestStreak,
+      'profile.streak.lastActivity': new Date()
+    });
+
+    console.log(`Updated user streak: current=${currentStreak}, longest=${longestStreak}`);
+  } catch (error) {
+    console.error('Error updating user streak:', error);
+    throw error;
+  }
+}
 
 module.exports = router;

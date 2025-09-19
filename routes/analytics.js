@@ -4,6 +4,7 @@ const { requireAuth, getOrCreateUser } = require('../middleware/auth');
 const databaseService = require('../services/databaseService');
 const Content = require('../models/Content');
 const Quiz = require('../models/Quiz');
+const QuizAttempt = require('../models/QuizAttempt');
 const Progress = require('../models/Progress');
 const User = require('../models/User');
 
@@ -513,6 +514,203 @@ router.get('/subjects', requireAuth, getOrCreateUser, async (req, res, next) => 
     
   } catch (error) {
     console.error('Get subject analytics error:', error);
+    next(error);
+  }
+});
+
+// Get all quiz analyses for comprehensive analytics view
+router.get('/all-quiz-analyses', requireAuth, getOrCreateUser, async (req, res, next) => {
+  try {
+    const user = req.user;
+    const { page = 1, limit = 20 } = req.query;
+    
+    const skip = (page - 1) * limit;
+    
+    // Get all quiz attempts directly from QuizAttempt collection
+    const [attempts, total] = await Promise.all([
+      QuizAttempt.aggregate([
+        {
+          $match: {
+            userId: user._id,
+            status: 'completed'
+          }
+        },
+        {
+          $group: {
+            _id: '$quizId',
+            latestAttempt: { $first: '$$ROOT' },
+            bestScore: { $max: '$score' },
+            totalAttempts: { $sum: 1 },
+            isPassed: { $max: { $cond: ['$passed', 1, 0] } },
+            lastAttempt: { $max: '$completedAt' }
+          }
+        },
+        {
+          $lookup: {
+            from: 'quizzes',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'quiz'
+          }
+        },
+        { $unwind: '$quiz' },
+        {
+          $lookup: {
+            from: 'contents',
+            localField: 'quiz.contentId',
+            foreignField: '_id',
+            as: 'content'
+          }
+        },
+        {
+          $project: {
+            quiz: 1,
+            content: { $arrayElemAt: ['$content', 0] },
+            latestAttempt: 1,
+            bestScore: 1,
+            totalAttempts: 1,
+            isPassed: { $eq: ['$isPassed', 1] },
+            lastAttempt: 1
+          }
+        },
+        { $sort: { lastAttempt: -1 } },
+        { $skip: skip },
+        { $limit: parseInt(limit) }
+      ]),
+      QuizAttempt.aggregate([
+        {
+          $match: {
+            userId: user._id,
+            status: 'completed'
+          }
+        },
+        {
+          $group: {
+            _id: '$quizId'
+          }
+        },
+        {
+          $count: 'total'
+        }
+      ])
+    ]);
+
+    const totalCount = total[0]?.total || 0;
+
+    // Process the results to get detailed analyses
+    const detailedAnalyses = attempts.map((item) => {
+      const latestAttempt = item.latestAttempt;
+      
+      return {
+        quiz: {
+          id: item.quiz._id,
+          title: item.quiz.title,
+          category: item.quiz.category,
+          difficulty: item.quiz.difficulty,
+          isCustom: item.quiz.isCustom || false
+        },
+        content: item.content ? {
+          id: item.content._id,
+          title: item.content.title,
+          category: item.content.category
+        } : null,
+        performance: {
+          bestScore: item.bestScore || 0,
+          totalAttempts: item.totalAttempts || 0,
+          isPassed: item.isPassed || false,
+          lastAttempt: item.lastAttempt
+        },
+        latestAnalysis: latestAttempt ? {
+          attemptId: latestAttempt._id,
+          score: latestAttempt.score,
+          passed: latestAttempt.passed,
+          correctAnswers: latestAttempt.answers?.filter(a => a.isCorrect).length || 0,
+          totalQuestions: latestAttempt.answers?.length || 0,
+          timeSpent: latestAttempt.timeSpent,
+          completedAt: latestAttempt.completedAt,
+          sectionScores: latestAttempt.sectionScores || [],
+          aiSummary: latestAttempt.aiSummary || null,
+          feedback: latestAttempt.feedback || null,
+          strengths: latestAttempt.aiSummary?.strengths || [],
+          weaknesses: latestAttempt.aiSummary?.weaknesses || [],
+          recommendations: latestAttempt.aiSummary?.recommendations || [],
+          topicsMastered: latestAttempt.aiSummary?.topicsMastered || [],
+          topicsToReview: latestAttempt.aiSummary?.topicsToReview || []
+        } : null
+      };
+    });
+
+    // Calculate overall statistics
+    const overallStats = {
+      totalQuizzesTaken: attempts.length,
+      totalQuizzesPassed: attempts.filter(a => a.isPassed).length,
+      averageScore: attempts.length > 0 ? 
+        Math.round(attempts.reduce((sum, a) => sum + (a.bestScore || 0), 0) / attempts.length) : 0,
+      totalAttempts: attempts.reduce((sum, a) => sum + (a.totalAttempts || 0), 0),
+      passRate: attempts.length > 0 ? 
+        Math.round((attempts.filter(a => a.isPassed).length / attempts.length) * 100) : 0
+    };
+
+    res.json({
+      success: true,
+      data: {
+        analyses: detailedAnalyses,
+        overallStats,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: totalCount,
+          pages: Math.ceil(totalCount / limit)
+        }
+      },
+      meta: {
+        generatedAt: new Date().toISOString()
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get all quiz analyses error:', error);
+    next(error);
+  }
+});
+
+// Debug endpoint to check quiz attempts
+router.get('/debug-quiz-attempts', requireAuth, getOrCreateUser, async (req, res, next) => {
+  try {
+    const user = req.user;
+    
+    const [allAttempts, completedAttempts, quizzes] = await Promise.all([
+      QuizAttempt.find({ userId: user._id }).populate('quizId', 'title').lean(),
+      QuizAttempt.find({ userId: user._id, status: 'completed' }).populate('quizId', 'title').lean(),
+      Quiz.find({ userId: user._id }).lean()
+    ]);
+
+    res.json({
+      success: true,
+      debug: {
+        userId: user._id,
+        clerkUserId: user.clerkUserId,
+        totalAttempts: allAttempts.length,
+        completedAttempts: completedAttempts.length,
+        totalQuizzes: quizzes.length,
+        attempts: allAttempts.map(a => ({
+          id: a._id,
+          quizId: a.quizId,
+          quizTitle: a.quizId?.title || 'Unknown',
+          status: a.status,
+          score: a.score,
+          completedAt: a.completedAt
+        })),
+        quizzes: quizzes.map(q => ({
+          id: q._id,
+          title: q.title,
+          category: q.category,
+          isCustom: q.isCustom
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Debug quiz attempts error:', error);
     next(error);
   }
 });

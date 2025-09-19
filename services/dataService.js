@@ -7,7 +7,6 @@ class DataService {
     this.dataDir = path.join(__dirname, '../data');
     this.initializeDataDir();
   }
-
   async initializeDataDir() {
     try {
       await fs.access(this.dataDir);
