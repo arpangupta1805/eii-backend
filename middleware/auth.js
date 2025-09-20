@@ -33,16 +33,18 @@ const getOrCreateUser = async (req, res, next) => {
       const { clerkClient } = require('@clerk/clerk-sdk-node');
       const clerkUser = await clerkClient.users.getUser(clerkUserId);
       
-      // Create new user in MongoDB
-      user = new User({
+      console.log('Creating new user without username for:', clerkUserId);
+      
+      // Create new user in MongoDB without username initially
+      const userData = {
         clerkUserId,
-        email: clerkUser.emailAddresses[0]?.emailAddress,
-        firstName: clerkUser.firstName,
-        lastName: clerkUser.lastName,
-        username: clerkUser.username || `user_${Date.now()}`,
-        profilePicture: clerkUser.imageUrl,
+        email: clerkUser.emailAddresses[0]?.emailAddress || `${clerkUserId}@clerk.local`,
+        username: null, // No username initially
+        firstName: clerkUser.firstName || 'User',
+        lastName: clerkUser.lastName || '',
+        profileImage: clerkUser.imageUrl || null,
         profile: {
-          fullName: `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim(),
+          fullName: `${clerkUser.firstName || 'User'} ${clerkUser.lastName || ''}`.trim(),
           dateOfBirth: null,
           location: {
             country: null,
@@ -76,10 +78,55 @@ const getOrCreateUser = async (req, res, next) => {
             autoGenerateQuizzes: true
           }
         }
+      };
+      
+      // Validate required fields before creating user
+      console.log('Creating user with data:', {
+        clerkUserId: userData.clerkUserId,
+        email: userData.email,
+        username: userData.username,
+        firstName: userData.firstName
       });
       
-      await user.save();
-      console.log('New user created:', clerkUserId);
+      user = new User(userData);
+      
+      try {
+        await user.save();
+        console.log('New user created successfully:', clerkUserId);
+      } catch (saveError) {
+        console.error('Error saving new user:', saveError);
+        
+        if (saveError.name === 'ValidationError') {
+          console.log('Validation error details:', saveError.errors);
+          
+          // Handle specific validation errors
+          if (saveError.errors.username) {
+            console.log('Username validation failed, generating new fallback...');
+            const fallbackUsername = `user_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            user.username = fallbackUsername;
+            console.log('Trying with fallback username:', fallbackUsername);
+            
+            try {
+              await user.save();
+              console.log('User saved successfully with fallback username:', fallbackUsername);
+            } catch (secondError) {
+              console.error('Failed to save even with fallback username:', secondError);
+              throw new Error(`Failed to create user: ${secondError.message}`);
+            }
+          } else {
+            throw saveError;
+          }
+        } else if (saveError.code === 11000) {
+          // Handle duplicate key error
+          console.log('Duplicate key error, generating new username...');
+          const uniqueUsername = `user_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+          user.username = uniqueUsername;
+          await user.save();
+          console.log('User saved with unique username:', uniqueUsername);
+        } else {
+          throw saveError;
+        }
+      }
     } else {
       // Update last seen
       user.lastSeen = new Date();
@@ -187,9 +234,44 @@ const optionalAuth = async (req, res, next) => {
   }
 };
 
+// Middleware to check if user has a username (required for community features)
+const requireUsername = async (req, res, next) => {
+  try {
+    // Ensure user is authenticated and loaded
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    // Check if user has a username
+    if (!req.user.username || req.user.username.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Username required',
+        code: 'USERNAME_REQUIRED',
+        data: {
+          requiresUsername: true,
+          userId: req.user._id
+        }
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Error in requireUsername middleware:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while checking username'
+    });
+  }
+};
+
 module.exports = {
   requireAuth,
   getOrCreateUser,
   checkPermissions,
-  optionalAuth
+  optionalAuth,
+  requireUsername
 };

@@ -5,6 +5,7 @@ const databaseService = require('../services/databaseService');
 const Content = require('../models/Content');
 const Quiz = require('../models/Quiz');
 const QuizAttempt = require('../models/QuizAttempt');
+const CommunityQuizAttempt = require('../models/CommunityQuizAttempt');
 const Progress = require('../models/Progress');
 const User = require('../models/User');
 
@@ -45,6 +46,7 @@ router.get('/dashboard', requireAuth, getOrCreateUser, async (req, res, next) =>
     const [
       contentStats,
       quizStats,
+      communityQuizStats,
       progressData,
       recentActivity,
       studyTimeData
@@ -89,6 +91,29 @@ router.get('/dashboard', requireAuth, getOrCreateUser, async (req, res, next) =>
             totalQuestions: { $sum: { $size: '$questions' } },
             avgAttempts: { $avg: '$analytics.totalAttempts' },
             avgScore: { $avg: '$analytics.averageScore' }
+          }
+        }
+      ]),
+      
+      // Community quiz statistics
+      CommunityQuizAttempt.aggregate([
+        { 
+          $match: { 
+            userId: user._id,
+            status: 'completed'
+          } 
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            avgScore: { $avg: '$score' },
+            totalTimeSpent: { $sum: '$timeSpent' },
+            passedAttempts: {
+              $sum: {
+                $cond: [{ $gte: ['$score', 60] }, 1, 0]
+              }
+            }
           }
         }
       ]),
@@ -156,6 +181,14 @@ router.get('/dashboard', requireAuth, getOrCreateUser, async (req, res, next) =>
       avgScore: 0
     };
 
+    // Process community quiz stats
+    const communityQuizAnalytics = communityQuizStats[0] || {
+      total: 0,
+      avgScore: 0,
+      totalTimeSpent: 0,
+      passedAttempts: 0
+    };
+
     // Process progress data
     const contentProgress = progressData.filter(p => p.progressType === 'content');
     const quizProgress = progressData.filter(p => p.progressType === 'quiz');
@@ -197,9 +230,20 @@ router.get('/dashboard', requireAuth, getOrCreateUser, async (req, res, next) =>
         passedQuizzes,
         quizPassRate: quizAnalytics.total > 0 ? 
           Math.round((passedQuizzes / quizAnalytics.total) * 100) : 0,
-        totalStudyTime, // in minutes
+        // Community quiz statistics
+        totalCommunityQuizzes: communityQuizAnalytics.total,
+        passedCommunityQuizzes: communityQuizAnalytics.passedAttempts,
+        communityQuizPassRate: communityQuizAnalytics.total > 0 ? 
+          Math.round((communityQuizAnalytics.passedAttempts / communityQuizAnalytics.total) * 100) : 0,
+        avgCommunityQuizScore: Math.round(communityQuizAnalytics.avgScore || 0),
+        // Combined quiz statistics
+        totalAllQuizzes: quizAnalytics.total + communityQuizAnalytics.total,
+        totalPassedQuizzes: passedQuizzes + communityQuizAnalytics.passedAttempts,
+        overallQuizPassRate: (quizAnalytics.total + communityQuizAnalytics.total) > 0 ? 
+          Math.round(((passedQuizzes + communityQuizAnalytics.passedAttempts) / (quizAnalytics.total + communityQuizAnalytics.total)) * 100) : 0,
+        totalStudyTime: totalStudyTime + (communityQuizAnalytics.totalTimeSpent || 0), // in minutes
         avgStudySession: progressData.length > 0 ? 
-          Math.round(totalStudyTime / progressData.length) : 0
+          Math.round((totalStudyTime + (communityQuizAnalytics.totalTimeSpent || 0)) / progressData.length) : 0
       },
       
       activity: {
@@ -670,6 +714,146 @@ router.get('/all-quiz-analyses', requireAuth, getOrCreateUser, async (req, res, 
     
   } catch (error) {
     console.error('Get all quiz analyses error:', error);
+    next(error);
+  }
+});
+
+// Get community quiz analyses for comprehensive analytics view
+router.get('/community-quiz-analyses', requireAuth, getOrCreateUser, async (req, res, next) => {
+  try {
+    const user = req.user;
+    const { page = 1, limit = 20 } = req.query;
+    
+    const skip = (page - 1) * limit;
+    
+    // Get community quiz attempts
+    const [communityAttempts, communityTotal] = await Promise.all([
+      CommunityQuizAttempt.aggregate([
+        {
+          $match: {
+            userId: user._id,
+            status: 'completed'
+          }
+        },
+        {
+          $lookup: {
+            from: 'communityquizzes',
+            localField: 'quizId',
+            foreignField: '_id',
+            as: 'quiz'
+          }
+        },
+        { $unwind: '$quiz' },
+        {
+          $lookup: {
+            from: 'communities',
+            localField: 'communityId',
+            foreignField: '_id',
+            as: 'community'
+          }
+        },
+        {
+          $project: {
+            quiz: 1,
+            community: { $arrayElemAt: ['$community', 0] },
+            score: 1,
+            timeSpent: 1,
+            completedAt: 1,
+            answers: 1,
+            type: { $literal: 'community' }
+          }
+        },
+        { $sort: { completedAt: -1 } },
+        { $skip: skip },
+        { $limit: parseInt(limit) }
+      ]),
+      CommunityQuizAttempt.aggregate([
+        {
+          $match: {
+            userId: user._id,
+            status: 'completed'
+          }
+        },
+        {
+          $count: 'total'
+        }
+      ])
+    ]);
+
+    const totalCount = communityTotal[0]?.total || 0;
+
+    // Process community quiz attempts
+    const communityAnalyses = communityAttempts.map((item) => {
+      return {
+        quiz: {
+          id: item.quiz._id,
+          title: item.quiz.title,
+          category: 'community',
+          difficulty: item.quiz.difficulty || 'medium',
+          isCustom: false,
+          type: 'community'
+        },
+        content: null,
+        community: item.community ? {
+          id: item.community._id,
+          name: item.community.name,
+          description: item.community.description
+        } : null,
+        performance: {
+          bestScore: item.score || 0,
+          totalAttempts: 1, // Each community quiz attempt is separate
+          isPassed: (item.score || 0) >= 60,
+          lastAttempt: item.completedAt
+        },
+        latestAnalysis: {
+          attemptId: item._id,
+          score: item.score,
+          passed: (item.score || 0) >= 60,
+          correctAnswers: item.answers?.filter(a => a.isCorrect).length || 0,
+          totalQuestions: item.answers?.length || 0,
+          timeSpent: item.timeSpent,
+          completedAt: item.completedAt,
+          sectionScores: [],
+          aiSummary: null,
+          feedback: null,
+          strengths: [],
+          weaknesses: [],
+          recommendations: [],
+          insightLevel: 'basic'
+        }
+      };
+    });
+
+    // Calculate overall stats for community quizzes
+    const overallStats = {
+      totalCommunityQuizzesTaken: totalCount,
+      averageScore: communityAnalyses.length > 0 ? 
+        Math.round(communityAnalyses.reduce((sum, item) => sum + item.performance.bestScore, 0) / communityAnalyses.length) : 0,
+      passedQuizzes: communityAnalyses.filter(item => item.performance.isPassed).length,
+      passRate: communityAnalyses.length > 0 ? 
+        Math.round((communityAnalyses.filter(item => item.performance.isPassed).length / communityAnalyses.length) * 100) : 0
+    };
+
+    res.json({
+      success: true,
+      data: {
+        analyses: communityAnalyses,
+        overallStats,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: totalCount,
+          pages: Math.ceil(totalCount / limit)
+        }
+      },
+      meta: {
+        generatedAt: new Date().toISOString(),
+        type: 'community'
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get community quiz analyses error:', error);
     next(error);
   }
 });

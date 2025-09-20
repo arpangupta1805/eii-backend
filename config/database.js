@@ -4,8 +4,6 @@ const connectDB = async () => {
   try {
     // Connection options for better stability in production
     const options = {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
       serverSelectionTimeoutMS: 30000, // 30 seconds
       socketTimeoutMS: 45000, // 45 seconds
       maxPoolSize: 10, // Maintain up to 10 socket connections only to prevent the overload 

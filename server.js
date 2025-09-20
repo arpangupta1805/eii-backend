@@ -35,6 +35,10 @@ const contentRoutes = require('./routes/content');
 const quizRoutes = require('./routes/quiz');
 const analyticsRoutes = require('./routes/analytics');
 const chatbotRoutes = require('./routes/chatbot');
+const communityRoutes = require('./routes/community');
+const communityContentRoutes = require('./routes/communityContent');
+const communityQuizRoutes = require('./routes/communityQuiz');
+const communityChatRoutes = require('./routes/communityChat');
 
 // Import middleware
 const errorHandler = require('./middleware/errorHandler');
@@ -146,15 +150,15 @@ const createRateLimiter = (windowMs, max, message) => rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => {
-    // Skip rate limiting for health checks
-    return req.path === '/health';
+    // Skip rate limiting for health checks and community endpoints
+    return req.path === '/health' || req.path.startsWith('/api/community');
   }
 });
 
 // General API rate limiting
 app.use('/api/', createRateLimiter(
   15 * 60 * 1000, // 15 minutes
-  100, // 100 requests per window
+  200, // 200 requests per window
   'Too many requests from this IP, please try again later.'
 ));
 
@@ -285,6 +289,10 @@ app.use('/api/v1/content', contentRoutes);
 app.use('/api/v1/quiz', quizRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/chatbot', chatbotRoutes);
+app.use('/api/v1/community', communityRoutes);
+app.use('/api/v1/community-content', communityContentRoutes);
+app.use('/api/v1/community-quiz', communityQuizRoutes);
+app.use('/api/v1/community-chat', communityChatRoutes);
 
 // Backward compatibility (without versioning)
 app.use('/api/auth', authRoutes);
@@ -292,6 +300,10 @@ app.use('/api/content', contentRoutes);
 app.use('/api/quiz', quizRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/chatbot', chatbotRoutes);
+app.use('/api/community', communityRoutes);
+app.use('/api/community-content', communityContentRoutes);
+app.use('/api/community-quiz', communityQuizRoutes);
+app.use('/api/community-chat', communityChatRoutes);
 
 // Root route for health check and basic info
 app.get('/', (req, res) => {
