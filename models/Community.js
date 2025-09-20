@@ -6,25 +6,43 @@ const communitySchema = new mongoose.Schema({
     required: true,
     unique: true,
     trim: true,
-    enum: ['JEE', 'NEET'] // Only these two communities for now
+    maxlength: 50
   },
   description: {
     type: String,
     required: true,
-    trim: true
+    trim: true,
+    maxlength: 500
   },
   category: {
     type: String,
-    enum: ['academic', 'professional', 'general'],
-    default: 'academic'
+    enum: [
+      'Study Group',
+      'JEE Preparation', 
+      'NEET Preparation',
+      'Subject Specific',
+      'Doubt Solving',
+      'Mock Tests',
+      'Motivation',
+      'Other',
+      'academic', // Legacy support
+      'professional', // Legacy support
+      'general' // Legacy support
+    ],
+    default: 'Study Group'
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
   icon: {
     type: String,
-    default: null
+    default: '📖'
   },
   color: {
     type: String,
-    default: '#3B82F6' // Default blue color
+    default: 'from-blue-400 to-indigo-500'
   },
   isActive: {
     type: Boolean,
@@ -35,6 +53,18 @@ const communitySchema = new mongoose.Schema({
     default: 0
   },
   settings: {
+    isPrivate: {
+      type: Boolean,
+      default: false
+    },
+    allowMemberInvites: {
+      type: Boolean,
+      default: true
+    },
+    requireApproval: {
+      type: Boolean,
+      default: false
+    },
     allowContentSharing: {
       type: Boolean,
       default: true

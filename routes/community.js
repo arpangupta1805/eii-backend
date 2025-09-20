@@ -12,13 +12,22 @@ const CommunityMessage = require('../models/CommunityMessage');
 // Get all available communities
 router.get('/', requireAuth, getOrCreateUser, async (req, res, next) => {
   try {
+    const { _id: userId } = req.user;
+    
     const communities = await Community.find({ isActive: true })
-      .select('name description category icon color memberCount settings')
-      .sort({ name: 1 });
+      .select('name description category icon color memberCount settings createdBy')
+      .populate('createdBy', 'firstName lastName username')
+      .sort({ memberCount: -1, name: 1 });
+
+    // Add isCreatedByUser flag for frontend
+    const communitiesWithCreatorInfo = communities.map(community => ({
+      ...community.toObject(),
+      isCreatedByUser: community.createdBy && community.createdBy._id.toString() === userId.toString()
+    }));
 
     res.json({
       success: true,
-      data: communities
+      data: communitiesWithCreatorInfo
     });
   } catch (error) {
     console.error('Get communities error:', error);
@@ -54,6 +63,108 @@ router.get('/my-communities', requireAuth, getOrCreateUser, async (req, res, nex
     next(error);
   }
 });
+
+// Create a new community
+router.post('/create', requireAuth, getOrCreateUser, requireUsername, async (req, res, next) => {
+  try {
+    const { name, description, category, isPrivate } = req.body;
+    const { _id: userId, clerkUserId } = req.user;
+
+    // Validate required fields
+    if (!name || !description) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name and description are required'
+      });
+    }
+
+    // Check if community name already exists
+    const existingCommunity = await Community.findOne({ 
+      name: { $regex: new RegExp(`^${name}$`, 'i') } 
+    });
+
+    if (existingCommunity) {
+      return res.status(400).json({
+        success: false,
+        message: 'A community with this name already exists'
+      });
+    }
+
+    // Create the community
+    const community = new Community({
+      name: name.trim(),
+      description: description.trim(),
+      category: category || 'Study Group',
+      createdBy: userId,
+      icon: getCommunityIcon(name),
+      color: getCommunityColor(category),
+      memberCount: 1,
+      settings: {
+        isPrivate: isPrivate || false,
+        allowMemberInvites: true,
+        requireApproval: false
+      }
+    });
+
+    await community.save();
+
+    // Automatically add the creator as an admin member
+    const memberData = new CommunityMember({
+      userId,
+      clerkUserId,
+      communityId: community._id,
+      role: 'admin',
+      isActive: true,
+      joinedAt: new Date(),
+      stats: {
+        messagesCount: 0,
+        contentShared: 0,
+        quizzesCreated: 0,
+        quizzesTaken: 0
+      }
+    });
+
+    await memberData.save();
+
+    console.log('✅ Community created successfully:', community._id, 'by user:', userId);
+
+    res.json({
+      success: true,
+      message: 'Community created successfully',
+      data: community
+    });
+  } catch (error) {
+    console.error('Create community error:', error);
+    next(error);
+  }
+});
+
+// Helper functions for community creation
+function getCommunityIcon(name) {
+  const lowerName = name.toLowerCase();
+  if (lowerName.includes('jee') || lowerName.includes('physics') || lowerName.includes('math')) return '🎯';
+  if (lowerName.includes('neet') || lowerName.includes('biology') || lowerName.includes('medical')) return '🩺';
+  if (lowerName.includes('chemistry')) return '🧪';
+  if (lowerName.includes('english') || lowerName.includes('literature')) return '📚';
+  if (lowerName.includes('doubt') || lowerName.includes('help')) return '❓';
+  if (lowerName.includes('motivation') || lowerName.includes('support')) return '💪';
+  if (lowerName.includes('test') || lowerName.includes('quiz')) return '📝';
+  return '📖'; // Default icon
+}
+
+function getCommunityColor(category) {
+  const colors = {
+    'Study Group': 'from-blue-400 to-indigo-500',
+    'JEE Preparation': 'from-purple-400 to-indigo-500',
+    'NEET Preparation': 'from-green-400 to-teal-500',
+    'Subject Specific': 'from-yellow-400 to-orange-500',
+    'Doubt Solving': 'from-red-400 to-pink-500',
+    'Mock Tests': 'from-indigo-400 to-purple-500',
+    'Motivation': 'from-pink-400 to-rose-500',
+    'Other': 'from-gray-400 to-slate-500'
+  };
+  return colors[category] || colors['Study Group'];
+}
 
 // Join a community
 router.post('/:communityId/join', requireAuth, getOrCreateUser, requireUsername, async (req, res, next) => {
